@@ -1,0 +1,13 @@
+# 配置文件
+db_path: douyin_data.db
+max_workers: 5
+output_dir: output
+log_level: INFO
+downloads_dir: downloads
+mp3_dir: mp3
+logs_dir: logs
+asr_api:
+  provider: whisper  # 语音识别提供商
+  api_key: ""       # API密钥
+  model: base       # 模型名称
+  language: zh      # 识别语言
