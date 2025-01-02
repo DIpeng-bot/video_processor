@@ -13,6 +13,7 @@ class VideoHandler(FileSystemEventHandler):
         self.processor = processor
         self.processed_files = set()
         self.processing_files = set()  # 正在处理的文件
+        self.temp_files = set()  # 跟踪.temp文件
         
         # 初始化时记录已存在的文件
         downloads_dir = Path(processor.config.downloads_dir)
@@ -25,6 +26,8 @@ class VideoHandler(FileSystemEventHandler):
         try:
             # 检查文件扩展名
             if file_path.suffix.lower() not in ['.mp4', '.mov', '.avi']:
+                if file_path.suffix.lower() == '.temp':
+                    self.temp_files.add(file_path.stem)  # 记录.temp文件
                 logging.debug(f"跳过非视频文件: {file_path.name}")
                 return False
                 
@@ -71,6 +74,23 @@ class VideoHandler(FileSystemEventHandler):
             return
             
         self._process_video(file_path)
+    
+    def on_moved(self, event):
+        """处理文件重命名事件"""
+        if event.is_directory:
+            return
+            
+        src_path = Path(event.src_path)
+        dest_path = Path(event.dest_path)
+        
+        # 如果是从.temp重命名为.mp4
+        if src_path.suffix.lower() == '.temp' and dest_path.suffix.lower() == '.mp4':
+            logging.info(f"检测到文件重命名: {src_path.name} -> {dest_path.name}")
+            
+            # 如果之前记录过这个.temp文件
+            if src_path.stem in self.temp_files:
+                self.temp_files.remove(src_path.stem)
+                self._process_video(dest_path)
     
     def _process_video(self, file_path):
         """处理视频文件"""

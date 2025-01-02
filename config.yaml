@@ -11,3 +11,6 @@ asr_api:
   api_key: ""       # API密钥
   model: base       # 模型名称
   language: zh      # 识别语言
+deepseek_api:
+  api_key: "sk-58fa21cdc2964973a7e4e2223b65699e"       # DeepSeek API密钥
+  model: "deepseek-chat"  # 模型名称

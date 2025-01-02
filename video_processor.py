@@ -10,6 +10,7 @@ import whisper
 import torch
 from pydub import AudioSegment
 import pandas as pd
+from text_processor import TextProcessor
 
 @dataclass
 class Config:
@@ -17,8 +18,10 @@ class Config:
     downloads_dir: str
     mp3_dir: str
     logs_dir: str
-    output_dir: str  # 新增输出目录配置
+    output_dir: str
     asr_api: Dict[str, Any]
+    openai_api: Dict[str, Any]
+    deepseek_api: Dict[str, Any]
 
     @classmethod
     def load_config(cls, config_path: str = "config.yaml") -> 'Config':
@@ -35,6 +38,12 @@ class Config:
                         'provider': 'whisper',
                         'model': 'base',
                         'language': 'zh'
+                    }),
+                    openai_api=config_data.get('openai_api', {
+                        'api_key': ''
+                    }),
+                    deepseek_api=config_data.get('deepseek_api', {
+                        'api_key': ''
                     })
                 )
         except FileNotFoundError:
@@ -48,6 +57,12 @@ class Config:
                     'provider': 'whisper',
                     'model': 'base',
                     'language': 'zh'
+                },
+                openai_api={
+                    'api_key': ''
+                },
+                deepseek_api={
+                    'api_key': ''
                 }
             )
 
@@ -59,6 +74,7 @@ class VideoProcessor:
         self._setup_logging()
         self._setup_directories()
         self._setup_asr_model()
+        self._setup_text_processor()
 
     def _setup_directories(self) -> None:
         """确保所需目录存在"""
@@ -92,6 +108,19 @@ class VideoProcessor:
         except Exception as e:
             logging.error(f"ASR模型初始化失败: {e}")
             raise
+
+    def _setup_text_processor(self) -> None:
+        """初始化文本处理器"""
+        try:
+            if self.config.deepseek_api['api_key']:
+                self.text_processor = TextProcessor(self.config.deepseek_api['api_key'])
+                logging.info("文本处理器初始化完成")
+            else:
+                self.text_processor = None
+                logging.warning("未配置DeepSeek API密钥，文本优化功能将被禁用")
+        except Exception as e:
+            logging.error(f"文本处理器初始化失败: {e}")
+            self.text_processor = None
 
     def convert_video_to_mp3(self, video_path: str) -> str:
         """将视频文件转换为MP3格式"""
@@ -150,7 +179,7 @@ class VideoProcessor:
             logging.error(f"语音识别失败: {e}")
             raise
 
-    def _save_to_excel(self, video_name: str, transcript: str) -> None:
+    def _save_to_excel(self, video_name: str, transcript: str, optimized: str = None, summary: str = None) -> None:
         """保存转录结果到Excel文件"""
         excel_path = os.path.join(self.config.output_dir, "transcripts.xlsx")
         
@@ -160,15 +189,17 @@ class VideoProcessor:
                 df = pd.read_excel(excel_path)
             except Exception as e:
                 logging.error(f"读取Excel文件失败: {e}")
-                df = pd.DataFrame(columns=['视频名称', '转录时间', '转录内容'])
+                df = pd.DataFrame(columns=['视频名称', '转录时间', '原始转录', '优化转录', '内容总结'])
         else:
-            df = pd.DataFrame(columns=['视频名称', '转录时间', '转录内容'])
+            df = pd.DataFrame(columns=['视频名称', '转录时间', '原始转录', '优化转录', '内容总结'])
         
         # 添加新的记录
         new_row = {
             '视频名称': video_name,
             '转录时间': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            '转录内容': transcript
+            '原始转录': transcript,
+            '优化转录': optimized if optimized else '',
+            '内容总结': summary if summary else ''
         }
         
         # 如果已存在相同视频名称的记录，则更新它
@@ -208,23 +239,49 @@ class VideoProcessor:
             
             # 调用ASR API进行转录
             logging.info("开始语音识别...")
-            full_text = self.call_asr_api(mp3_path)
+            transcript = self.call_asr_api(mp3_path)
             logging.info("语音识别完成")
             
-            # 保存转录文本到Excel
+            # 处理转录文本
+            optimized = None
+            summary = None
+            if self.text_processor and transcript:
+                logging.info("开始处理转录文本...")
+                try:
+                    result = self.text_processor.process_transcript(transcript)
+                    optimized = result.get("optimized")
+                    summary = result.get("summary")
+                    logging.info("文本处理完成")
+                except Exception as e:
+                    logging.error(f"处理转录文本时出错: {e}")
+            
+            # 保存转录文本
             video_name = Path(video_path).stem
-            self._save_to_excel(video_name, full_text)
+            self._save_to_excel(video_name, transcript, optimized, summary)
             
             # 同时保存到单独的文本文件
             transcript_dir = os.path.join(self.config.output_dir, "transcripts")
             os.makedirs(transcript_dir, exist_ok=True)
-            transcript_path = os.path.join(transcript_dir, f"{video_name}.txt")
             
+            # 保存原始转录
+            transcript_path = os.path.join(transcript_dir, f"{video_name}.txt")
             with open(transcript_path, "w", encoding="utf-8") as f:
-                f.write(full_text)
+                f.write(transcript)
+            
+            # 如果有优化后的文本，保存到单独文件
+            if optimized:
+                optimized_path = os.path.join(transcript_dir, f"{video_name}_optimized.txt")
+                with open(optimized_path, "w", encoding="utf-8") as f:
+                    f.write(optimized)
+            
+            # 如果有总结，保存到单独文件
+            if summary:
+                summary_path = os.path.join(transcript_dir, f"{video_name}_summary.txt")
+                with open(summary_path, "w", encoding="utf-8") as f:
+                    f.write(summary)
             
             logging.info(f"转录文本已保存到: {transcript_path}")
-            return full_text
+            return transcript
 
         except Exception as e:
             logging.error(f"处理视频时出错: {str(e)}")
